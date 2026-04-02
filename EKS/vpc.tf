@@ -88,13 +88,14 @@ resource "aws_security_group" "eks_cluster" {
   name   = "${var.cluster_name}-eks-cluster-sg"
   vpc_id = aws_vpc.main.id
 
+  # API access (kubectl)
   ingress {
     description = "Allow HTTPS (kubectl / API)"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
 
-    # ⚠️ In production, restrict this
+    # ⚠️ Restrict this in production
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -118,22 +119,13 @@ resource "aws_security_group" "node" {
   name   = "${var.cluster_name}-node-sg"
   vpc_id = aws_vpc.main.id
 
-  # Node-to-node communication (pods, kubelet, etc.)
+  # Node-to-node communication
   ingress {
     description = "Allow node to node"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     self        = true
-  }
-
-  # Cluster -> Node communication
-  ingress {
-    description = "Allow cluster to communicate with nodes"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    security_groups = [aws_security_group.eks_cluster.id]
   }
 
   egress {
@@ -147,4 +139,30 @@ resource "aws_security_group" "node" {
   tags = merge(var.tags, {
     Name = "${var.cluster_name}-node-sg"
   })
+}
+
+# =========================================
+# SECURITY GROUP RULES (NO CIRCULAR DEPENDENCY)
+# =========================================
+
+# Cluster → Node communication
+resource "aws_security_group_rule" "cluster_to_node" {
+  type                     = "ingress"
+  from_port                = 0
+  to_port                  = 0
+  protocol                 = "-1"
+
+  security_group_id        = aws_security_group.node.id
+  source_security_group_id = aws_security_group.eks_cluster.id
+}
+
+# Node → Cluster communication
+resource "aws_security_group_rule" "node_to_cluster" {
+  type                     = "ingress"
+  from_port                = 0
+  to_port                  = 0
+  protocol                 = "-1"
+
+  security_group_id        = aws_security_group.eks_cluster.id
+  source_security_group_id = aws_security_group.node.id
 }
