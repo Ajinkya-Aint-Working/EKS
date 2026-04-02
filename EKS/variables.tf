@@ -10,15 +10,10 @@ variable "vpc_cidr" {
   default = "10.0.0.0/16"
 }
 
-variable "public_subnets" {
-  type    = list(string)
-  default = ["10.0.1.0/24", "10.0.2.0/24"]
+variable "cluster_version" {
+  default = 1.33
 }
 
-variable "azs" {
-  type    = list(string)
-  default = ["ap-south-1a", "ap-south-1b"]
-}
 
 variable "instance_type" {
   default = "t3.medium"
@@ -32,15 +27,19 @@ variable "addons" {
   default = [
     {
       name    = "vpc-cni"
-      version = null
+      version = "v1.20.0-eksbuild.1"
     },
     {
       name    = "coredns"
-      version = null
+      version = "v1.12.2-eksbuild.4"
     },
     {
       name    = "kube-proxy"
-      version = null
+      version = "v1.33.0-eksbuild.2"
+    },
+    {
+      name    = "aws-ebs-csi-driver"
+      version = "v1.46.0-eksbuild.1"
     }
   ]
 }
