@@ -4,6 +4,7 @@ resource "aws_eks_cluster" "eks" {
 
   vpc_config {
     subnet_ids = aws_subnet.public[*].id
+    security_group_ids = [aws_security_group.eks_cluster.id]
   }
 
   depends_on = [
@@ -30,6 +31,10 @@ resource "aws_iam_openid_connect_provider" "eks" {
 resource "aws_launch_template" "node" {
   name_prefix   = "eks-node"
   instance_type = var.instance_type
+
+  network_interfaces {
+    security_groups = [aws_security_group.node.id]
+  }
 }
 
 # =========================
