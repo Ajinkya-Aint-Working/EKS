@@ -65,6 +65,10 @@ resource "helm_release" "alb" {
   {
     name  = "serviceAccount.name"
     value = kubernetes_service_account_v1.alb.metadata[0].name
+  },
+  {
+    name  = "vpcId"
+    value = aws_vpc.main.id
   }
 ]
 }
