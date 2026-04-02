@@ -43,6 +43,12 @@ resource "aws_launch_template" "node" {
 
   vpc_security_group_ids = [aws_security_group.node.id]
 
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
   block_device_mappings {
     device_name = "/dev/xvda"
 
