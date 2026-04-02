@@ -54,21 +54,21 @@ resource "helm_release" "alb" {
   ]
 
   set = [
-  {
-    name  = "clusterName"
-    value = var.cluster_name
-  },
-  {
-    name  = "serviceAccount.create"
-    value = "false"
-  },
-  {
-    name  = "serviceAccount.name"
-    value = kubernetes_service_account_v1.alb.metadata[0].name
-  },
-  {
-    name  = "vpcId"
-    value = aws_vpc.main.id
-  }
-]
+    {
+      name  = "clusterName"
+      value = var.cluster_name
+    },
+    {
+      name  = "serviceAccount.create"
+      value = "false"
+    },
+    {
+      name  = "serviceAccount.name"
+      value = kubernetes_service_account_v1.alb.metadata[0].name
+    },
+    {
+      name  = "vpcId"
+      value = aws_vpc.main.id
+    }
+  ]
 }

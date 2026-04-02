@@ -147,10 +147,10 @@ resource "aws_security_group" "node" {
 
 # Cluster → Node communication
 resource "aws_security_group_rule" "cluster_to_node" {
-  type                     = "ingress"
-  from_port                = 0
-  to_port                  = 0
-  protocol                 = "-1"
+  type      = "ingress"
+  from_port = 0
+  to_port   = 0
+  protocol  = "-1"
 
   security_group_id        = aws_security_group.node.id
   source_security_group_id = aws_security_group.eks_cluster.id
@@ -158,10 +158,10 @@ resource "aws_security_group_rule" "cluster_to_node" {
 
 # Node → Cluster communication
 resource "aws_security_group_rule" "node_to_cluster" {
-  type                     = "ingress"
-  from_port                = 0
-  to_port                  = 0
-  protocol                 = "-1"
+  type      = "ingress"
+  from_port = 0
+  to_port   = 0
+  protocol  = "-1"
 
   security_group_id        = aws_security_group.eks_cluster.id
   source_security_group_id = aws_security_group.node.id
