@@ -44,3 +44,15 @@ variable "addons" {
     }
   ]
 }
+
+variable "public_subnet_count" {
+  default = 2
+}
+
+variable "tags" {
+  type = map(string)
+  default = {
+    Environment = "dev"
+    Terraform   = "true"
+  }
+}
