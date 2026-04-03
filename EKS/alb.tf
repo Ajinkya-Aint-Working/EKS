@@ -51,8 +51,8 @@ resource "helm_release" "alb" {
 
   # cleanup_on_fail ensures that if the Helm release installation fails, it will be automatically cleaned up, preventing orphaned resources and ensuring a clean state for subsequent attempts.
   cleanup_on_fail = true
-  wait = true
-  timeout = 600
+  wait            = true
+  timeout         = 600
 
 
   depends_on = [
