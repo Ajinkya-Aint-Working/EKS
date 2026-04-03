@@ -40,7 +40,8 @@ resource "aws_iam_role_policy_attachment" "node_policies" {
     "AmazonEKSWorkerNodePolicy",
     "AmazonEC2ContainerRegistryReadOnly",
     "AmazonEKS_CNI_Policy",
-    "AmazonSSMManagedInstanceCore"
+    "AmazonSSMManagedInstanceCore",
+    "AmazonEBSCSIDriverPolicy"
   ])
 
   role       = aws_iam_role.node.name
