@@ -99,7 +99,41 @@ resource "aws_eks_addon" "eks-addons" {
   addon_name    = each.value.name
   addon_version = each.value.version
 
+  # 👇 attach role ONLY for EBS CSI
+  service_account_role_arn = each.value.name == "aws-ebs-csi-driver" ? aws_iam_role.ebs_csi.arn : null
+
   depends_on = [
-    aws_eks_node_group.ondemand-node
+    aws_eks_node_group.ondemand-node,
+    aws_iam_role_policy_attachment.ebs_csi_policy
   ]
+}
+
+# =========================
+# policy for CSI driver
+# =========================
+
+resource "aws_iam_role" "ebs_csi" {
+  name = "ebs-csi-controller-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.eks.arn
+      },
+      Action = "sts:AssumeRoleWithWebIdentity",
+      Condition = {
+        StringEquals = {
+          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+        }
+      }
+    }]
+  })
+}
+
+
+resource "aws_iam_role_policy_attachment" "ebs_csi_policy" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 }

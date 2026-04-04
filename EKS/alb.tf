@@ -56,7 +56,7 @@ resource "helm_release" "alb" {
 
 
   depends_on = [
-    aws_eks_node_group.ondemand-node
+    kubernetes_service_account_v1.alb
   ]
 
   set = [
