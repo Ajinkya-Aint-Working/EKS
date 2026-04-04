@@ -3,7 +3,7 @@ variable "region" {
 }
 
 variable "cluster_name" {
-  default = "demo-eks"
+  default = "demo"
 }
 
 variable "vpc_cidr" {
@@ -11,7 +11,7 @@ variable "vpc_cidr" {
 }
 
 variable "cluster_version" {
-  default = 1.33
+  default = 1.35
 }
 
 
@@ -35,19 +35,19 @@ variable "addons" {
   default = [
     {
       name    = "vpc-cni"
-      version = "v1.20.0-eksbuild.1"
+      version = "v1.21.1-eksbuild.1"
     },
     {
       name    = "coredns"
-      version = "v1.12.2-eksbuild.4"
+      version = "v1.13.2-eksbuild.3"
     },
     {
       name    = "kube-proxy"
-      version = "v1.33.0-eksbuild.2"
+      version = "v1.35.0-eksbuild.2"
     },
     {
       name    = "aws-ebs-csi-driver"
-      version = "v1.46.0-eksbuild.1"
+      version = "v1.57.1-eksbuild.1"
     }
   ]
 }
