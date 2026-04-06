@@ -56,7 +56,9 @@ resource "kubernetes_service_account_v1" "alb" {
     }
   }
 
-  depends_on = [null_resource.wait_for_nodes]
+  depends_on = [null_resource.wait_for_nodes,
+    aws_iam_role_policy_attachment.alb_attach
+  ]
 }
 
 # Helm Install
@@ -73,7 +75,7 @@ resource "helm_release" "alb" {
 
 
   depends_on = [
-    null_resource.wait_for_nodes
+    kubernetes_service_account_v1.alb
   ]
 
   set = [
