@@ -15,6 +15,10 @@ resource "aws_eks_cluster" "eks" {
     bootstrap_cluster_creator_admin_permissions = true
   }
 
+  tags = merge(var.tags, { # ← ADD THIS
+    Name = var.cluster_name
+  })
+
   depends_on = [
     aws_iam_role_policy_attachment.eks_cluster_policy
   ]
@@ -32,6 +36,10 @@ resource "aws_iam_openid_connect_provider" "eks" {
   url             = aws_eks_cluster.eks.identity[0].oidc[0].issuer
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
+
+  tags = merge(var.tags, {
+    Name = "${var.cluster_name}-oidc"
+  })
 }
 
 # =========================
@@ -59,6 +67,37 @@ resource "aws_launch_template" "node" {
       encrypted             = true
     }
   }
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = merge(var.tags, {
+      Name                                        = "${var.cluster_name}-node"
+      "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+    })
+  }
+
+  tag_specifications {
+    resource_type = "volume"
+    tags = merge(var.tags, {
+      Name                                        = "${var.cluster_name}-node-volume"
+      "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+    })
+  }
+
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = merge(var.tags, {
+      Name                                        = "${var.cluster_name}-node-eni"
+      "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+    })
+  }
+
+
+  # Tag the launch template resource itself
+  tags = merge(var.tags, {
+    Name = "${var.cluster_name}-launch-template"
+  })
+
 }
 
 # =========================
@@ -78,12 +117,16 @@ resource "aws_eks_node_group" "ondemand-node" {
 
   launch_template {
     id      = aws_launch_template.node.id
-    version = "$Latest"
+    version = aws_launch_template.node.latest_version
   }
 
   labels = {
     "type" = "ondemand"
   }
+
+  tags = merge(var.tags, {
+    Name = "${var.cluster_name}-ondemand-ng"
+  })
 
   depends_on = [
     aws_iam_role_policy_attachment.node_policies

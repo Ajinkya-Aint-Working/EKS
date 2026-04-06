@@ -109,6 +109,8 @@ resource "aws_security_group" "eks_cluster" {
 
   tags = merge(var.tags, {
     Name = "${var.cluster_name}-eks-cluster-sg"
+    # Tells EKS this SG belongs to the cluster
+    "kubernetes.io/cluster/${var.cluster_name}" = "owned"
   })
 }
 
@@ -138,6 +140,8 @@ resource "aws_security_group" "node" {
 
   tags = merge(var.tags, {
     Name = "${var.cluster_name}-node-sg"
+    # Required — ALB controller uses this to find node SGs
+    "kubernetes.io/cluster/${var.cluster_name}" = "owned"
   })
 }
 
@@ -165,4 +169,15 @@ resource "aws_security_group_rule" "node_to_cluster" {
 
   security_group_id        = aws_security_group.eks_cluster.id
   source_security_group_id = aws_security_group.node.id
+}
+
+# ALB → Node ports (required for ALB target group health checks)
+resource "aws_security_group_rule" "alb_to_node" {
+  type              = "ingress"
+  from_port         = 0
+  to_port           = 65535
+  protocol          = "tcp"
+  security_group_id = aws_security_group.node.id
+  cidr_blocks       = [var.vpc_cidr] # scope to VPC, not 0.0.0.0/0
+  description       = "Allow ALB to reach node ports"
 }

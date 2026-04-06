@@ -36,6 +36,10 @@ resource "null_resource" "wait_for_nodes" {
     aws_eks_node_group.ondemand-node
   ]
 
+  triggers = {
+    nodegroup_id = aws_eks_node_group.ondemand-node.id
+  }
+
   provisioner "local-exec" {
     command = "aws eks update-kubeconfig --region ${var.region} --name ${var.cluster_name} && kubectl wait --for=condition=Ready nodes --all --timeout=300s"
   }
@@ -88,6 +92,10 @@ resource "helm_release" "alb" {
     {
       name  = "vpcId"
       value = aws_vpc.main.id
+    },
+    {
+      name  = "region"
+      value = var.region
     }
   ]
 }
