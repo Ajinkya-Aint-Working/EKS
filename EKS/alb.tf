@@ -37,13 +37,7 @@ resource "null_resource" "wait_for_nodes" {
   ]
 
   provisioner "local-exec" {
-    command = <<EOT
-aws eks update-kubeconfig \
-  --region ${var.region} \
-  --name ${var.cluster_name}
-
-kubectl wait --for=condition=Ready nodes --all --timeout=300s
-EOT
+    command = "aws eks update-kubeconfig --region ${var.region} --name ${var.cluster_name} && kubectl wait --for=condition=Ready nodes --all --timeout=300s"
   }
 }
 
