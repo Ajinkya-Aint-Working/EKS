@@ -30,6 +30,23 @@ resource "aws_iam_role_policy_attachment" "alb_attach" {
   policy_arn = aws_iam_policy.alb.arn
 }
 
+resource "null_resource" "wait_for_nodes" {
+  depends_on = [
+    aws_eks_cluster.eks,
+    aws_eks_node_group.ondemand-node
+  ]
+
+  provisioner "local-exec" {
+    command = <<EOT
+aws eks update-kubeconfig \
+  --region ${var.region} \
+  --name ${var.cluster_name}
+
+kubectl wait --for=condition=Ready nodes --all --timeout=300s
+EOT
+  }
+}
+
 # Kubernetes Service Account
 resource "kubernetes_service_account_v1" "alb" {
   metadata {
@@ -40,6 +57,8 @@ resource "kubernetes_service_account_v1" "alb" {
       "eks.amazonaws.com/role-arn" = aws_iam_role.alb.arn
     }
   }
+
+  depends_on = [null_resource.wait_for_nodes]
 }
 
 # Helm Install
@@ -56,8 +75,7 @@ resource "helm_release" "alb" {
 
 
   depends_on = [
-    kubernetes_service_account_v1.alb ,
-    aws_eks_node_group.ondemand-node
+    null_resource.wait_for_nodes
   ]
 
   set = [
