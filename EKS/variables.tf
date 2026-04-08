@@ -63,3 +63,8 @@ variable "tags" {
     Terraform   = "true"
   }
 }
+
+variable "karpenter_version" {
+  description = "Karpenter Helm chart version"
+  default     = "1.11.0"
+}
