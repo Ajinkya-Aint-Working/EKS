@@ -78,3 +78,28 @@ output "node_role_arn" {
 output "oidc_provider_arn" {
   value = aws_iam_openid_connect_provider.eks.arn
 }
+
+
+# =========================================
+# Karpenter IAM Roles and SQS Queue
+# =========================================
+
+output "karpenter_node_role_arn" {
+  description = "ARN of the Karpenter node IAM role"
+  value       = aws_iam_role.karpenter_node.arn
+}
+
+output "karpenter_controller_role_arn" {
+  description = "ARN of the Karpenter controller IAM role"
+  value       = aws_iam_role.karpenter_controller.arn
+}
+
+output "karpenter_sqs_queue_url" {
+  description = "URL of the Karpenter interruption SQS queue"
+  value       = aws_sqs_queue.karpenter_interruption.url
+}
+
+output "karpenter_sqs_queue_arn" {
+  description = "ARN of the Karpenter interruption SQS queue"
+  value       = aws_sqs_queue.karpenter_interruption.arn
+}

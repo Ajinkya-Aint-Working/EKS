@@ -6,6 +6,8 @@ resource "aws_ec2_tag" "karpenter_subnet_tags" {
   resource_id = aws_subnet.public[count.index].id
   key         = "karpenter.sh/discovery"
   value       = var.cluster_name
+
+  depends_on = [ aws_subnet.public ]
 }
 
 # =========================
@@ -15,6 +17,8 @@ resource "aws_ec2_tag" "karpenter_node_sg_tag" {
   resource_id = aws_security_group.node.id
   key         = "karpenter.sh/discovery"
   value       = var.cluster_name
+
+  depends_on = [ aws_security_group.node ]
 }
 
 # =========================
@@ -60,7 +64,7 @@ resource "helm_release" "karpenter" {
 
     {
     name  = "settings.interruptionQueue"
-    value = aws_eks_cluster.eks.name
+    value = aws_sqs_queue.karpenter_interruption.name
     },
 
     {
@@ -128,6 +132,7 @@ resource "helm_release" "karpenter_crds" {
 
   depends_on = [
     aws_eks_node_group.ondemand-node,
-    kubernetes_namespace_v1.karpenter
+    kubernetes_namespace_v1.karpenter,
+    helm_release.alb
   ]
 }
