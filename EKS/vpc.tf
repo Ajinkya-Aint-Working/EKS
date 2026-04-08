@@ -48,6 +48,9 @@ resource "aws_subnet" "public" {
 
     # Required for EKS
     "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+
+    # Required for Karpenter discovery
+    "karpenter.sh/discovery" = var.cluster_name
   })
 }
 
@@ -134,6 +137,7 @@ resource "aws_security_group" "node" {
   tags = merge(var.tags, {
     Name                                        = "${var.cluster_name}-node-sg"
     "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+    "karpenter.sh/discovery"                    = var.cluster_name
   })
 }
 

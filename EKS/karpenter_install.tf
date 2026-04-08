@@ -1,27 +1,4 @@
 # =========================
-# Tag subnets for Karpenter discovery
-# =========================
-resource "aws_ec2_tag" "karpenter_subnet_tags" {
-  count       = var.public_subnet_count
-  resource_id = aws_subnet.public[count.index].id
-  key         = "karpenter.sh/discovery"
-  value       = var.cluster_name
-
-  depends_on = [ aws_subnet.public ]
-}
-
-# =========================
-# Tag node security group for Karpenter discovery
-# =========================
-resource "aws_ec2_tag" "karpenter_node_sg_tag" {
-  resource_id = aws_security_group.node.id
-  key         = "karpenter.sh/discovery"
-  value       = var.cluster_name
-
-  depends_on = [ aws_security_group.node ]
-}
-
-# =========================
 # EKS Access Entry for Karpenter Node Role
 # (your cluster uses authentication_mode = "API", so no aws-auth ConfigMap needed)
 # =========================
@@ -110,11 +87,8 @@ resource "helm_release" "karpenter" {
   ]
 
   depends_on = [
-    aws_eks_node_group.ondemand-node,
     aws_iam_role_policy.karpenter_controller_policy,
     aws_eks_access_entry.karpenter_node,
-    aws_ec2_tag.karpenter_subnet_tags,
-    aws_ec2_tag.karpenter_node_sg_tag,
     helm_release.karpenter_crds
   ]
 }
@@ -131,8 +105,7 @@ resource "helm_release" "karpenter_crds" {
   create_namespace = false
 
   depends_on = [
-    aws_eks_node_group.ondemand-node,
-    kubernetes_namespace_v1.karpenter,
-    helm_release.alb
+    null_resource.wait_for_nodes,
+    kubernetes_namespace_v1.karpenter
   ]
 }
