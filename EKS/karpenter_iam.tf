@@ -63,5 +63,6 @@ resource "aws_iam_role_policy" "karpenter_controller_policy" {
     region                    = var.region
     karpenter_node_role_arn   = aws_iam_role.karpenter_node.arn
     eks_cluster_arn           = aws_eks_cluster.eks.arn
+    sqs_queue_arn           = aws_sqs_queue.karpenter_interruption.arn
   })
 }
