@@ -34,7 +34,7 @@ resource "aws_eks_access_entry" "karpenter_node" {
 # =========================
 resource "helm_release" "karpenter" {
   name             = "karpenter"
-  namespace        = "kube-system"
+  namespace        = var.karpenter_namespace
   repository       = "oci://public.ecr.aws/karpenter"
   chart            = "karpenter"
   version          = var.karpenter_version
@@ -109,7 +109,7 @@ resource "helm_release" "karpenter" {
 # =========================
 resource "helm_release" "karpenter_crds" {
   name             = "karpenter-crd"
-  namespace        = "kube-system"
+  namespace        = var.karpenter_namespace
   repository       = "oci://public.ecr.aws/karpenter"
   chart            = "karpenter-crd"
   version          = var.karpenter_version
