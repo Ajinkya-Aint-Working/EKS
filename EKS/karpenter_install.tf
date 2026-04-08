@@ -30,6 +30,17 @@ resource "aws_eks_access_entry" "karpenter_node" {
 }
 
 # =========================
+# Karpenter Namespace
+# =========================
+
+resource "kubernetes_namespace_v1" "karpenter" {
+  metadata {
+    name = var.karpenter_namespace
+  }
+  depends_on = [aws_eks_node_group.ondemand-node]
+}
+
+# =========================
 # Karpenter Helm Release
 # =========================
 resource "helm_release" "karpenter" {
@@ -115,5 +126,8 @@ resource "helm_release" "karpenter_crds" {
   version          = var.karpenter_version
   create_namespace = false
 
-  depends_on = [aws_eks_node_group.ondemand-node]
+  depends_on = [
+    aws_eks_node_group.ondemand-node,
+    kubernetes_namespace_v1.karpenter
+  ]
 }
