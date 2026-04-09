@@ -3,18 +3,18 @@ data "terraform_remote_state" "infra" {
 
   config = {
     bucket = "terraform-s3-state-007"
-    key    = "Infra/terraform.tfstate"   #  same key as defined in Infra/backend.tf
+    key    = "Infra/terraform.tfstate" #  same key as defined in Infra/backend.tf
     region = "ap-south-1"
   }
 }
 
 locals {
-  cluster_name         = data.terraform_remote_state.infra.outputs.cluster_name
-  cluster_endpoint     = data.terraform_remote_state.infra.outputs.cluster_endpoint
-  cluster_ca           = data.terraform_remote_state.infra.outputs.cluster_ca
+  cluster_name     = data.terraform_remote_state.infra.outputs.cluster_name
+  cluster_endpoint = data.terraform_remote_state.infra.outputs.cluster_endpoint
+  cluster_ca       = data.terraform_remote_state.infra.outputs.cluster_ca
 
-  karpenter_controller_role_arn   = data.terraform_remote_state.infra.outputs.karpenter_controller_role_arn
-  karpenter_queue_name = data.terraform_remote_state.infra.outputs.karpenter_sqs_queue_name
+  karpenter_controller_role_arn = data.terraform_remote_state.infra.outputs.karpenter_controller_role_arn
+  karpenter_queue_name          = data.terraform_remote_state.infra.outputs.karpenter_sqs_queue_name
 
-  node_group_name      = data.terraform_remote_state.infra.outputs.node_group_name
+  node_group_name = data.terraform_remote_state.infra.outputs.node_group_name
 }
