@@ -79,6 +79,11 @@ output "oidc_provider_arn" {
   value = aws_iam_openid_connect_provider.eks.arn
 }
 
+output "cluster_ca" {
+  description = "Base64 encoded cluster CA certificate"
+  value       = aws_eks_cluster.eks.certificate_authority[0].data
+  sensitive = true
+}
 
 # =========================================
 # Karpenter IAM Roles and SQS Queue
@@ -102,4 +107,9 @@ output "karpenter_sqs_queue_url" {
 output "karpenter_sqs_queue_arn" {
   description = "ARN of the Karpenter interruption SQS queue"
   value       = aws_sqs_queue.karpenter_interruption.arn
+}
+
+output "karpenter_sqs_queue_name" {
+  description = "Name of the Karpenter interruption SQS queue"
+  value       = aws_sqs_queue.karpenter_interruption.name
 }
