@@ -71,5 +71,5 @@ variable "karpenter_version" {
 
 variable "karpenter_namespace" {
   description = "namespace for karpenter"
-  default = "karpenter"
+  default     = "karpenter"
 }

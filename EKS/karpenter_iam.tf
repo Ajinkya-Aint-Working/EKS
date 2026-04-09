@@ -59,10 +59,10 @@ resource "aws_iam_role_policy" "karpenter_controller_policy" {
   role = aws_iam_role.karpenter_controller.id
 
   policy = templatefile("${path.module}/policies/karpenter-controller-policy.json", {
-    cluster_name              = var.cluster_name
-    region                    = var.region
-    karpenter_node_role_arn   = aws_iam_role.karpenter_node.arn
-    eks_cluster_arn           = aws_eks_cluster.eks.arn
+    cluster_name            = var.cluster_name
+    region                  = var.region
+    karpenter_node_role_arn = aws_iam_role.karpenter_node.arn
+    eks_cluster_arn         = aws_eks_cluster.eks.arn
     sqs_queue_arn           = aws_sqs_queue.karpenter_interruption.arn
   })
 }
