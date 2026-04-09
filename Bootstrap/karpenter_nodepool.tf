@@ -25,7 +25,7 @@ resource "kubectl_manifest" "karpenter_node_pool" {
               values: ["c", "m", "r"]
             - key: karpenter.k8s.aws/instance-generation
               operator: Gt
-              values: ["2"]
+              values: ["3"]
           nodeClassRef:
             group: karpenter.k8s.aws
             kind: EC2NodeClass
@@ -51,17 +51,17 @@ resource "kubectl_manifest" "karpenter_ec2_node_class" {
     metadata:
       name: default
     spec:
-      role: "KarpenterNodeRole-${var.cluster_name}"
+      role: "KarpenterNodeRole-${local.cluster_name}"
       amiSelectorTerms:
         - alias: "al2023@latest"
       subnetSelectorTerms:
         - tags:
-            karpenter.sh/discovery: "${var.cluster_name}"
+            karpenter.sh/discovery: "${local.cluster_name}"
       securityGroupSelectorTerms:
         - tags:
-            karpenter.sh/discovery: "${var.cluster_name}"
+            karpenter.sh/discovery: "${local.cluster_name}"
       tags:
-        karpenter.sh/discovery: "${var.cluster_name}"
+        karpenter.sh/discovery: "${local.cluster_name}"
   YAML
 
   depends_on = [helm_release.karpenter]

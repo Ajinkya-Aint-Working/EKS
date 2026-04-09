@@ -78,10 +78,7 @@ resource "helm_release" "karpenter" {
   ]
 
   depends_on = [
-    aws_iam_role_policy.karpenter_controller_policy,
-    aws_eks_access_entry.karpenter_node,
     kubernetes_namespace_v1.karpenter,
-    null_resource.wait_for_alb,
     helm_release.karpenter_crds
   ]
 }
@@ -101,7 +98,6 @@ resource "helm_release" "karpenter_crds" {
   timeout          = 600
 
   depends_on = [
-    kubernetes_namespace_v1.karpenter,
-    null_resource.wait_for_alb
+    kubernetes_namespace_v1.karpenter
   ]
 }
