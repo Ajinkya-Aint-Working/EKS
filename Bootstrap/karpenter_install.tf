@@ -98,6 +98,7 @@ resource "helm_release" "karpenter_crds" {
   timeout          = 600
 
   depends_on = [
-    kubernetes_namespace_v1.karpenter
+    kubernetes_namespace_v1.karpenter,
+    helm_release.alb
   ]
 }
