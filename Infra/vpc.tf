@@ -4,6 +4,7 @@
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
+  enable_dns_support   = true # required for interface endpoint DNS resolution
 
   tags = merge(var.tags, {
     Name = "${var.cluster_name}-vpc"
@@ -95,13 +96,13 @@ resource "aws_eip" "nat" {
 
 # =========================================
 # NAT GATEWAY (single, placed in public subnet 0)
-# All private subnets in all AZs route through this one NAT.
-# Cost-saving trade-off: cross-AZ traffic incurs data transfer charges
-# if a private node in AZ-1 reaches the internet via the NAT in AZ-0.
+# With all VPC endpoints in place, the NAT only handles traffic
+# to truly external destinations (e.g. GitHub, DockerHub, apt repos).
+# ECR, S3, STS, EC2, SQS, SSM, EKS all bypass it entirely.
 # =========================================
 resource "aws_nat_gateway" "nat" {
   allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id # must live in a public subnet
+  subnet_id     = aws_subnet.public[0].id # must live in a public subnet 
 
   tags = merge(var.tags, {
     Name = "${var.cluster_name}-nat"
@@ -171,7 +172,7 @@ resource "aws_route_table_association" "private_assoc" {
 resource "aws_security_group" "eks_cluster" {
   name   = "${var.cluster_name}-eks-cluster-sg"
   vpc_id = aws_vpc.main.id
-  
+
   # ← NO ingress blocks here at all
   # ← KEEP egress inline — egress-only rules don't have this conflict
 
@@ -201,7 +202,7 @@ resource "aws_security_group" "node" {
   name   = "${var.cluster_name}-node-sg"
   vpc_id = aws_vpc.main.id
 
-    # ← NO ingress blocks here
+  # ← NO ingress blocks here
 
   egress {
     description = "Allow all outbound"
