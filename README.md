@@ -1,6 +1,6 @@
-# EKS + Karpenter Terraform Setup 
+# EKS Modules — Terraform Infrastructure README
 
-A two-phase Terraform project that provisions a production-grade Amazon EKS cluster with Karpenter autoscaling and the AWS Load Balancer Controller (ALB Controller). The project is split into two root modules — **Infra** and **Bootstrap** — each with its own remote state, so they can be applied independently and in order.
+A two-phase Terraform project that provisions a production-grade Amazon EKS cluster with private node networking, VPC endpoints for NAT cost minimisation, Karpenter autoscaling, and the AWS Load Balancer Controller. The project is split into two root modules — **Infra** and **Bootstrap** — each with its own remote state, applied independently and in order.
 
 ---
 
@@ -10,6 +10,8 @@ A two-phase Terraform project that provisions a production-grade Amazon EKS clus
 2. [Repository Structure](#repository-structure)
 3. [Phase 1 — Infra Module](#phase-1--infra-module)
    - [VPC & Networking](#vpc--networking)
+   - [Private Subnets & NAT Gateway](#private-subnets--nat-gateway)
+   - [VPC Endpoints](#vpc-endpoints)
    - [EKS Cluster](#eks-cluster)
    - [Managed Node Group](#managed-node-group)
    - [EKS Add-ons](#eks-add-ons)
@@ -35,46 +37,65 @@ A two-phase Terraform project that provisions a production-grade Amazon EKS clus
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Phase 1: Infra                                         │
-│                                                         │
-│  VPC (10.0.0.0/16)                                      │
-│  ├── Public Subnet AZ-a (10.0.0.0/24)                   │
-│  └── Public Subnet AZ-b (10.0.1.0/24)                   │
-│                                                         │
-│  EKS Cluster (API auth mode)                            │
-│  ├── OIDC Provider                                      │
-│  ├── Managed Node Group (ON_DEMAND, t3.medium)          │
-│  └── Add-ons: vpc-cni, coredns, kube-proxy, ebs-csi     │
-│                                                         │
-│  IAM Roles                                              │
-│  ├── Cluster Role                                       │
-│  ├── Node Role                                          │
-│  ├── EBS CSI Controller Role (IRSA)                     │
-│  ├── ALB Controller Role (IRSA)                         │
-│  ├── Karpenter Node Role                                │
-│  └── Karpenter Controller Role (IRSA)                   │
-│                                                         │
-│  SQS + EventBridge (Karpenter Interruption Handling)    │
-│  ├── Spot Interruption Warning                          │
-│  ├── Instance Rebalance Recommendation                  │
-│  ├── Instance State Change                              │
-│  └── AWS Health Scheduled Change                        │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Phase 1: Infra                                                  │
+│                                                                  │
+│  VPC (10.0.0.0/16)   enable_dns_support = true                   │
+│  │                                                               │
+│  ├── Public Subnet AZ-a  (10.0.0.0/24)  ──► IGW                  │
+│  ├── Public Subnet AZ-b  (10.0.1.0/24)  ──► IGW                  │
+│  │       └── NAT Gateway (single, AZ-a)                          │
+│  │                                                               │
+│  ├── Private Subnet AZ-a (10.0.10.0/24) ──► NAT Gateway          │
+│  └── Private Subnet AZ-b (10.0.11.0/24) ──► NAT Gateway          │
+│          │   (karpenter.sh/discovery tag)                        │
+│          │   (kubernetes.io/role/internal-elb tag)               │
+│          │                                                       │
+│          └── All nodes & Karpenter-provisioned instances         │
+│                                                                  │
+│  VPC Endpoints (bypass NAT entirely)                             │
+│  ├── Gateway: S3, DynamoDB          (free)                       │
+│  └── Interface: ECR API, ECR DKR,                                │
+│       EC2, STS, SQS, EKS,                                        │
+│       SSM, SSMMessages, EC2Messages  (~$7-8/mo each)             │
+│                                                                  │
+│  EKS Cluster (API auth mode)                                     │
+│  ├── Control plane ENIs in both public + private subnets         │
+│  ├── Public endpoint  (kubectl from laptop)                      │
+│  ├── Private endpoint (nodes reach API internally)               │
+│  ├── OIDC Provider                                               │
+│  ├── Managed Node Group (ON_DEMAND, private subnets)             │
+│  └── Add-ons: vpc-cni, coredns, kube-proxy, ebs-csi              │
+│                                                                  │
+│  IAM Roles                                                       │
+│  ├── Cluster Role                                                │
+│  ├── Node Role                                                   │
+│  ├── EBS CSI Controller Role (IRSA)                              │
+│  ├── ALB Controller Role (IRSA)                                  │
+│  ├── Karpenter Node Role + EKS Access Entry                      │
+│  └── Karpenter Controller Role (IRSA)                            │
+│                                                                  │
+│  SQS + EventBridge (Karpenter Interruption Handlinig)            │
+│  ├── Spot Interruption Warning                                   │
+│  ├── Instance Rebalance Recommendation                           │
+│  ├── Instance State Change                                       │
+│  └── AWS Health Scheduled Change                                 │
+└──────────────────────────────────────────────────────────────────┘
                           │
                   S3 Remote State
                           │
-┌─────────────────────────────────────────────────────────┐
-│  Phase 2: Bootstrap                                     │
-│                                                         │
-│  Helm: AWS Load Balancer Controller (kube-system)       │
-│  Helm: Karpenter CRDs                                   │
-│  Helm: Karpenter Controller (karpenter namespace)       │
-│                                                         │
-│  kubectl_manifest:                                      │
-│  ├── NodePool (default) — spot + on-demand, c/m/r       │
-│  └── EC2NodeClass (default) — AL2023, tag discovery     │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Phase 2: Bootstrap                                              │
+│                                                                  │
+│  Helm: AWS Load Balancer Controller (kube-system)                │
+│  Helm: Karpenter CRDs                                            │
+│  Helm: Karpenter Controller (karpenter namespace)                │
+│         └── Pinned to managed node group via node affinity       │
+│                                                                  │
+│  kubectl_manifest:                                               │
+│  ├── NodePool (default) — spot + on-demand, c/m/r families       │
+│  └── EC2NodeClass (default) — AL2023, private subnet discovery   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -84,7 +105,8 @@ A two-phase Terraform project that provisions a production-grade Amazon EKS clus
 ```
 EKS-Modules/
 ├── Infra/                          # Phase 1 — AWS infrastructure
-│   ├── vpc.tf                      # VPC, subnets, IGW, route tables, security groups
+│   ├── vpc.tf                      # VPC, public/private subnets, IGW, NAT, route tables, SGs
+│   ├── vpc_endpoints.tf            # All VPC endpoints (gateway + interface) for NAT cost reduction
 │   ├── eks.tf                      # EKS cluster, OIDC, launch template, node group, add-ons, EBS CSI role
 │   ├── iam.tf                      # Cluster role + Node role
 │   ├── karpenter_iam.tf            # Karpenter node role, controller role (IRSA), EKS access entry
@@ -119,31 +141,92 @@ EKS-Modules/
 
 **File:** `Infra/vpc.tf`
 
-A fresh VPC is created with DNS hostnames enabled. The number of public subnets is controlled by `var.public_subnet_count` (default: 2). Each subnet gets a dynamically computed `/24` CIDR block carved out of `var.vpc_cidr` (`10.0.0.0/16`) using `cidrsubnet()`, placed in successive availability zones.
+The VPC is created with both `enable_dns_hostnames` and `enable_dns_support` set to `true`. The `enable_dns_support` flag is not optional — it is **required for interface endpoint private DNS resolution**. Without it, service hostnames like `sqs.ap-south-1.amazonaws.com` won't resolve to the endpoint ENI IPs inside the VPC and will fall through to public IPs, sending traffic through NAT and defeating the purpose of the endpoints.
 
-**Subnet tags are critical** — three tag sets are applied:
+**Public Subnets** are created with `map_public_ip_on_launch = true` and carry two tags:
 
 | Tag | Value | Purpose |
 |-----|-------|---------|
-| `kubernetes.io/role/elb` | `1` | Tells the ALB controller these subnets are eligible for internet-facing ALBs |
-| `kubernetes.io/cluster/<name>` | `owned` | EKS subnet ownership |
-| `karpenter.sh/discovery` | `<cluster-name>` | Karpenter subnet discovery via tag selector |
+| `kubernetes.io/role/elb` | `1` | Marks subnets as eligible for internet-facing ALBs |
+| `kubernetes.io/cluster/<name>` | `owned` | EKS subnet ownership marker |
 
-A single public route table routes `0.0.0.0/0` through the Internet Gateway and is associated with all public subnets.
+Note that `karpenter.sh/discovery` is intentionally **absent** from public subnets — Karpenter should only ever launch nodes into private subnets.
 
-**Security Groups** follow an important pattern: ingress rules are defined as **separate `aws_security_group_rule` resources** (not inline blocks). This avoids Terraform conflicts when EKS also manages ingress rules. The `lifecycle { ignore_changes = [ingress] }` block is set on both security groups to prevent Terraform from fighting EKS's own rule management.
+**Security Groups** define ingress rules as separate `aws_security_group_rule` resources (not inline blocks) with `lifecycle { ignore_changes = [ingress] }`. This prevents Terraform from conflicting with EKS's own dynamic ingress rule management. The following rules are created:
 
-The following ingress rules are created:
-
-| Rule | From | To | Description |
-|------|------|----|-------------|
-| `cluster_to_node` | EKS Cluster SG | Node SG | All traffic, control plane → workers |
-| `node_to_cluster` | Node SG | EKS Cluster SG | All traffic, workers → control plane |
+| Rule | From | To | Purpose |
+|------|------|----|---------|
+| `cluster_to_node` | EKS Cluster SG | Node SG | Control plane → workers, all traffic |
+| `node_to_cluster` | Node SG | EKS Cluster SG | Workers → control plane, all traffic |
 | `node_to_node` | Node SG (self) | Node SG | Pod-to-pod and node-to-node |
 | `cluster_api_access` | `0.0.0.0/0` | EKS Cluster SG (443) | Public kubectl / API access |
-| `alb_to_node` | VPC CIDR | Node SG (all TCP ports) | ALB → NodePort services |
+| `alb_to_node` | VPC CIDR | Node SG (all TCP) | ALB → NodePort services |
 
-The Node SG is also tagged with `karpenter.sh/discovery: <cluster-name>` so Karpenter can discover it for new nodes.
+---
+
+### Private Subnets & NAT Gateway
+
+**File:** `Infra/vpc.tf`
+
+Private subnets are created with the same count as public subnets (`var.public_subnet_count`), one per AZ, using a CIDR offset of `+10` to avoid collision:
+
+| Subnet | CIDR | AZ |
+|--------|------|----|
+| `public-0` | `10.0.0.0/24` | AZ-a |
+| `public-1` | `10.0.1.0/24` | AZ-b |
+| `private-0` | `10.0.10.0/24` | AZ-a |
+| `private-1` | `10.0.11.0/24` | AZ-b |
+
+Private subnets carry three tags:
+
+| Tag | Value | Purpose |
+|-----|-------|---------|
+| `kubernetes.io/role/internal-elb` | `1` | Internal ALB subnet eligibility |
+| `kubernetes.io/cluster/<name>` | `owned` | EKS ownership |
+| `karpenter.sh/discovery` | `<cluster-name>` | Karpenter subnet discovery — private subnets only |
+
+**Single NAT Gateway** is placed in `public[0]` (AZ-a). All private subnets across all AZs share one private route table pointing `0.0.0.0/0` to this NAT. The cost trade-off: nodes in AZ-b routing to the internet via NAT in AZ-a incur cross-AZ data transfer charges (~$0.01/GB), but with VPC endpoints in place, the actual volume of NAT traffic is minimal — only truly external destinations (DockerHub, GitHub, `apt` repos) go through NAT.
+
+A single `aws_eip` is allocated with `depends_on = [aws_internet_gateway.igw]` — this dependency is required because EIP allocation can race with IGW attachment.
+
+---
+
+### VPC Endpoints
+
+**File:** `Infra/vpc_endpoints.tf`
+
+All AWS service traffic from nodes bypasses the NAT Gateway entirely via VPC endpoints. Endpoints are split into two types:
+
+#### Gateway Endpoints — Free
+
+No hourly cost, no data processing charge, no security group required. Traffic is routed directly from the route table.
+
+| Endpoint | Service Name | Attached Route Tables | Why |
+|----------|-------------|----------------------|-----|
+| `s3` | `com.amazonaws.<region>.s3` | private + public | ECR stores every image layer in S3. The single biggest source of NAT data charges on any EKS cluster. |
+| `dynamodb` | `com.amazonaws.<region>.dynamodb` | private + public | Free to add; used by some AWS SDK internals. |
+
+Both gateway endpoints are attached to both the private and public route tables so they are reachable from anywhere in the VPC.
+
+#### Interface Endpoints — ~$7–8/month each (ap-south-1)
+
+Endpoint ENIs are placed in **private subnets** with `private_dns_enabled = true`. This makes the standard public AWS service DNS names (e.g. `sqs.ap-south-1.amazonaws.com`) resolve to private IPs inside the VPC — no code or config changes needed anywhere.
+
+All interface endpoints share a single **`vpc_endpoints_sg`** security group that permits inbound TCP 443 from `var.vpc_cidr` only.
+
+| Endpoint | Service | Traffic Intercepted |
+|----------|---------|---------------------|
+| `ecr_api` | `ecr.api` | Image manifest fetches and ECR auth token requests |
+| `ecr_dkr` | `ecr.dkr` | Docker registry layer pulls. Works in tandem with the S3 gateway endpoint — manifest via `ecr.dkr`, layers via S3, both completely bypassing NAT |
+| `ec2` | `ec2` | All Karpenter EC2 API calls: `RunInstances`, `CreateFleet`, `DescribeInstances`, `TerminateInstances`, `DescribeSpotPriceHistory`, etc. Very high call frequency |
+| `sts` | `sts` | `AssumeRoleWithWebIdentity` for every IRSA pod — Karpenter controller, ALB controller, and EBS CSI driver all call this on startup and on every token refresh |
+| `sqs` | `sqs` | Karpenter polls the interruption queue in a continuous loop. Every poll would otherwise cross the NAT |
+| `eks` | `eks` | Node bootstrap `DescribeCluster` calls and ongoing kubelet API communication |
+| `ssm` | `ssm` | SSM Session Manager — first of the required trio |
+| `ssmmessages` | `ssmmessages` | SSM data channel — second of the required trio |
+| `ec2messages` | `ec2messages` | SSM command delivery — third of the required trio. All three are required together; removing any one breaks SSM access to nodes |
+
+**Cost break-even:** At ap-south-1 pricing, 9 interface endpoints cost roughly $130–140/month fixed. This breaks even against NAT data charges at approximately 1.5–2 TB/month of AWS API traffic. An active cluster with Karpenter scaling, rolling deployments, and SSM access will typically exceed this.
 
 ---
 
@@ -151,12 +234,24 @@ The Node SG is also tagged with `karpenter.sh/discovery: <cluster-name>` so Karp
 
 **File:** `Infra/eks.tf`
 
-The cluster is created with:
+```hcl
+vpc_config {
+  subnet_ids              = concat(aws_subnet.public[*].id, aws_subnet.private[*].id)
+  endpoint_public_access  = true
+  endpoint_private_access = true
+}
+```
 
-- **Authentication mode: `API`** — this is the modern access entry model. No `aws-auth` ConfigMap is needed; access is managed via `aws_eks_access_entry` resources instead.
-- **`bootstrap_cluster_creator_admin_permissions: true`** — the IAM identity running `terraform apply` is automatically granted cluster admin access.
-- **Public endpoint only** (`endpoint_public_access = true`, `endpoint_private_access = false`) — suitable for development; tighten for production.
-- **OIDC Provider** — created from the cluster's OIDC issuer URL and the TLS thumbprint fetched live. This is the prerequisite for all IRSA (IAM Roles for Service Accounts) roles.
+**Both subnet types are passed** for a specific reason: `subnet_ids` in the cluster resource controls where EKS places **control plane ENIs** — not where nodes run. EKS uses these ENIs to establish network connectivity between the managed control plane (running in AWS's account) and resources inside your VPC.
+
+- Private subnets are needed so control plane ENIs have a direct network path to nodes (which live in private subnets)
+- Public subnets are needed to anchor the public API endpoint, which requires a subnet with IGW routing
+
+**Both endpoint access modes are enabled:**
+- `endpoint_public_access = true` — allows `kubectl` from your workstation
+- `endpoint_private_access = true` — nodes in private subnets reach the API server without leaving the VPC. Without this, API calls from nodes would exit through NAT and re-enter via the public endpoint, adding latency and unnecessary NAT charges
+
+The cluster uses `authentication_mode = API` — the modern access entry model. No `aws-auth` ConfigMap is needed.
 
 ---
 
@@ -164,16 +259,18 @@ The cluster is created with:
 
 **File:** `Infra/eks.tf`
 
-A single **ON_DEMAND** managed node group serves as the "system" node group — it hosts the Karpenter and ALB controller pods before Karpenter has provisioned any worker nodes.
+```hcl
+subnet_ids = aws_subnet.private[*].id   # private subnets only
+```
 
-The Launch Template enforces:
-- IMDSv2 required (`http_tokens = required`) — security hardening
-- 20 GB encrypted `gp3` EBS root volume
-- Detailed resource tagging (instance, volume, ENI) for cost attribution and Kubernetes ownership
+The managed node group launches exclusively into private subnets. Nodes have no public IPs. All outbound traffic (ECR pulls, SSM, AWS API calls) routes through either VPC endpoints or the NAT Gateway for truly external destinations.
 
-Scaling is controlled by `var.desired_size` / `var.min_size` / `var.max_size` (defaults: 2/1/3).
+The `depends_on` includes `aws_nat_gateway.nat` — this ensures NAT is fully provisioned before nodes attempt to pull container images. Without this, nodes can boot before NAT is ready, fail their initial image pulls, and enter a crash loop.
 
-The node group is labeled `type: ondemand` so Karpenter's affinity rules can pin itself to these nodes.
+Key launch template settings:
+- IMDSv2 enforced (`http_tokens = required`) — prevents SSRF attacks against the metadata service
+- 20 GB encrypted `gp3` root volume
+- Detailed tagging on instance, volume, and ENI resources
 
 ---
 
@@ -181,16 +278,14 @@ The node group is labeled `type: ondemand` so Karpenter's affinity rules can pin
 
 **File:** `Infra/eks.tf`
 
-Four managed add-ons are installed via `aws_eks_addon`, driven by a `var.addons` list variable (easy to extend):
-
 | Add-on | Default Version | Notes |
 |--------|----------------|-------|
 | `vpc-cni` | v1.21.1-eksbuild.1 | AWS pod networking |
 | `coredns` | v1.13.2-eksbuild.3 | Cluster DNS |
-| `kube-proxy` | v1.35.0-eksbuild.2 | Network rules |
-| `aws-ebs-csi-driver` | v1.57.1-eksbuild.1 | PersistentVolume support; gets its own IRSA role |
+| `kube-proxy` | v1.35.0-eksbuild.2 | Network rules on each node |
+| `aws-ebs-csi-driver` | v1.57.1-eksbuild.1 | PersistentVolume support; receives its own IRSA role (`ebs-csi-controller-role`) with `AmazonEBSCSIDriverPolicy` |
 
-The EBS CSI driver add-on is special — it requires an IRSA role (`ebs-csi-controller-role`) that allows `sts:AssumeRoleWithWebIdentity` for the `ebs-csi-controller-sa` service account in `kube-system`. The managed policy `AmazonEBSCSIDriverPolicy` is attached. All other add-ons receive no `service_account_role_arn`.
+Add-ons are driven by a `var.addons` list — extend it to add more without changing the resource block.
 
 ---
 
@@ -198,22 +293,19 @@ The EBS CSI driver add-on is special — it requires an IRSA role (`ebs-csi-cont
 
 **File:** `Infra/iam.tf`
 
-Two foundational roles:
-
 **EKS Cluster Role** (`<cluster-name>-cluster-role`): Trusted by `eks.amazonaws.com`. Policy: `AmazonEKSClusterPolicy`.
 
-**Node Role** (`<cluster-name>-node-role`): Trusted by `ec2.amazonaws.com`. Policies (applied with `for_each` over a set):
+**Node Role** (`<cluster-name>-node-role`): Trusted by `ec2.amazonaws.com`. Policies applied via `for_each`:
 - `AmazonEKSWorkerNodePolicy`
 - `AmazonEC2ContainerRegistryReadOnly`
 - `AmazonEKS_CNI_Policy`
-- `AmazonSSMManagedInstanceCore` (enables SSM Session Manager access to nodes)
+- `AmazonSSMManagedInstanceCore` — enables SSM Session Manager on all managed nodes
 
 ---
 
 ### Karpenter IAM & SQS Interruption Queue
 
 **Files:** `Infra/karpenter_iam.tf`, `Infra/karpenter_sqs.tf`
-
 Karpenter requires two separate IAM roles — one for the nodes it launches, one for its own controller pod.
 
 **Karpenter Node Role** (`KarpenterNodeRole-<cluster-name>`): Trusted by `ec2.amazonaws.com`. Policies:
@@ -222,9 +314,9 @@ Karpenter requires two separate IAM roles — one for the nodes it launches, one
 - `AmazonEC2ContainerRegistryPullOnly`
 - `AmazonSSMManagedInstanceCore`
 
-Since the cluster uses `authentication_mode = API`, a **`aws_eks_access_entry`** resource of type `EC2_LINUX` is created for this role — this registers it as a trusted node identity without touching `aws-auth`.
+Since the cluster uses `authentication_mode = API`, node access is granted via an `aws_eks_access_entry` resource of type `EC2_LINUX` — no aws-auth ConfigMap required.
 
-**Karpenter Controller Role** (`KarpenterControllerRole-<cluster-name>`): IRSA role trusted by the OIDC provider. The trust policy uses `StringEquals` conditions on both `:aud` (`sts.amazonaws.com`) and `:sub` (`system:serviceaccount:karpenter:karpenter`). The inline policy is rendered from `policies/karpenter-controller-policy.json` using `templatefile()` with four substitutions:
+**Karpenter Controller Role** (`KarpenterControllerRole-<cluster-name>`): IRSA role. The trust policy is scoped via `StringEquals` conditions on both `:aud` (`sts.amazonaws.com`) and `:sub` (`system:serviceaccount:karpenter:karpenter`). The inline policy is rendered from `policies/karpenter-controller-policy.json` using `templatefile()` with substitutions for cluster name, region, node role ARN, cluster ARN, and SQS queue ARN.
 
 | Template Variable | Value |
 |------------------|-------|
@@ -236,14 +328,14 @@ Since the cluster uses `authentication_mode = API`, a **`aws_eks_access_entry`**
 
 The policy grants Karpenter the ability to launch instances, create/delete launch templates, manage instance profiles (scoped to Karpenter-owned profiles via tag conditions), terminate instances tagged with `karpenter.sh/nodepool`, and interact with the SQS interruption queue.
 
-**SQS Interruption Queue** (`<cluster-name>-karpenter-spot-events`): Receives events from four EventBridge rules so Karpenter can gracefully handle node interruptions before AWS reclaims them:
+**SQS Interruption Queue** (`<cluster-name>-karpenter-spot-events`): Receives events from four EventBridge rules so Karpenter can gracefully cordon and drain nodes before AWS reclaims them:
 
-| EventBridge Rule | Event Source | Use Case |
-|-----------------|-------------|----------|
-| `spot_interruption` | `aws.ec2` — Spot Interruption Warning | 2-minute warning before Spot reclaim |
-| `rebalance_recommendation` | `aws.ec2` — Rebalance Recommendation | Early replacement of at-risk Spot nodes |
-| `instance_state_change` | `aws.ec2` — State-change Notification | Catch unexpected terminations |
-| `scheduled_change` | `aws.health` — AWS Health Event | AWS maintenance window notifications |
+| Rule | Event | Purpose |
+|------|-------|---------|
+| `spot_interruption` | EC2 Spot Interruption Warning | 2-minute warning before Spot reclaim |
+| `rebalance_recommendation` | EC2 Instance Rebalance Recommendation | Early replacement of at-risk Spot nodes |
+| `instance_state_change` | EC2 State-change Notification | Catch unexpected terminations |
+| `scheduled_change` | AWS Health Event | AWS maintenance window notifications |
 
 The SQS queue policy allows `events.amazonaws.com` to `sqs:SendMessage` only from the ARNs of these four rules (using `aws:SourceArn` condition). SSE is enabled with SQS-managed keys. Message retention is 14 days; visibility timeout is 5 minutes.
 
@@ -281,7 +373,7 @@ Everything the Bootstrap module needs is exported as outputs and stored in the I
 
 **File:** `Bootstrap/data.tf`
 
-The Bootstrap module has zero hardcoded values. All infrastructure references are pulled from the Infra module's remote state:
+No values are hardcoded in Bootstrap. Everything is pulled from the Infra remote state:
 
 ```hcl
 data "terraform_remote_state" "infra" {
@@ -294,7 +386,7 @@ data "terraform_remote_state" "infra" {
 }
 ```
 
-All values are aliased to locals for clean usage throughout the module (`local.cluster_name`, `local.vpc_id`, etc.).
+All outputs are aliased to locals (`local.cluster_name`, `local.vpc_id`, `local.karpenter_queue_name`, etc.) for clean usage throughout the module.
 
 ---
 
@@ -342,7 +434,7 @@ Three resources, applied in this order:
 
 **File:** `Bootstrap/karpenter_nodepool.tf`
 
-Two `kubectl_manifest` resources apply Karpenter's CRD instances as inline YAML:
+Two `kubectl_manifest` resources apply Karpenter CRD instances as inline YAML:
 
 **`NodePool` (default):**
 
@@ -364,10 +456,10 @@ Two `kubectl_manifest` resources apply Karpenter's CRD instances as inline YAML:
 |-------|-------|---------|
 | `role` | `KarpenterNodeRole-<cluster-name>` | IAM role for launched instances |
 | `amiSelectorTerms` | `al2023@latest` | Always use latest Amazon Linux 2023 AMI |
-| `subnetSelectorTerms` | tag: `karpenter.sh/discovery: <cluster-name>` | Discovers subnets by tag |
-| `securityGroupSelectorTerms` | tag: `karpenter.sh/discovery: <cluster-name>` | Discovers SGs by tag |
+| `subnetSelectorTerms` | tag: `karpenter.sh/discovery: <cluster-name>` | Discovers **private subnets only** — the tag exists only on private subnets |
+| `securityGroupSelectorTerms` | tag: `karpenter.sh/discovery: <cluster-name>` | Discovers node SG by tag |
 
-Both resources `depends_on = [helm_release.karpenter]` to ensure the CRDs exist before applying.
+Because `karpenter.sh/discovery` was placed **only on private subnets** in `vpc.tf`, Karpenter-provisioned nodes automatically land in private subnets with no additional configuration in the EC2NodeClass.
 
 ---
 
@@ -386,8 +478,6 @@ Both share the same bucket (`terraform-s3-state-007`) in `ap-south-1` with encry
 
 ## Provider Configuration
 
-Both modules use four providers:
-
 | Provider | Source | Version |
 |----------|--------|---------|
 | `aws` | `hashicorp/aws` | 6.38.0 |
@@ -395,9 +485,9 @@ Both modules use four providers:
 | `helm` | `hashicorp/helm` | 3.1.1 |
 | `kubectl` | `gavinbunney/kubectl` | 1.19.0 |
 
-**Infra** authenticates the Kubernetes/Helm/kubectl providers via a static token from `data.aws_eks_cluster_auth` — this works during initial provisioning because Infra creates the cluster and immediately reads it back.
+**Infra** authenticates Kubernetes/Helm/kubectl providers via a static token from `data.aws_eks_cluster_auth`. This works during initial provisioning because Infra creates the cluster and reads it back in the same apply.
 
-**Bootstrap** uses the `exec` approach (`aws eks get-token`) for Kubernetes/Helm/kubectl authentication. This fetches a fresh short-lived token at plan/apply time and is the recommended pattern for CI/CD pipelines.
+**Bootstrap** uses the `exec` approach (`aws eks get-token`) — fetches a fresh short-lived token at plan/apply time. This is the recommended pattern for CI/CD pipelines.
 
 ---
 
@@ -408,24 +498,24 @@ Both modules use four providers:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `region` | `ap-south-1` | AWS region |
-| `cluster_name` | `demo` | EKS cluster name (used as prefix for all resources) |
+| `cluster_name` | `demo` | EKS cluster name; used as prefix for all resources |
 | `vpc_cidr` | `10.0.0.0/16` | VPC CIDR block |
 | `cluster_version` | `1.35` | EKS Kubernetes version |
-| `instance_type` | `t3.medium` | Node group instance type |
+| `instance_type` | `t3.medium` | Managed node group instance type |
 | `desired_size` | `2` | Node group desired count |
 | `max_size` | `3` | Node group max count |
 | `min_size` | `1` | Node group min count |
-| `public_subnet_count` | `2` | Number of public subnets (and AZs) |
-| `addons` | (see below) | List of EKS managed add-ons |
-| `tags` | `{Environment=dev, Terraform=true}` | Default tags applied to all resources |
-| `karpenter_namespace` | `karpenter` | Namespace for Karpenter (used in IRSA trust condition) |
+| `public_subnet_count` | `2` | Number of AZs — creates this many public AND private subnets |
+| `addons` | (list) | EKS managed add-ons; extend by adding entries to the list |
+| `tags` | `{Environment=dev, Terraform=true}` | Default tags merged onto all resources |
+| `karpenter_namespace` | `karpenter` | Kubernetes namespace; must match the IRSA trust condition |
 
 ### Bootstrap Variables (`Bootstrap/variables.tf`)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `region` | `ap-south-1` | AWS region |
-| `karpenter_version` | `1.11.0` | Karpenter Helm chart version (used for both controller and CRD charts) |
+| `karpenter_version` | `1.11.0` | Helm chart version for both `karpenter` and `karpenter-crd` charts |
 | `karpenter_namespace` | `karpenter` | Kubernetes namespace for Karpenter |
 
 ---
@@ -441,7 +531,7 @@ Both modules use four providers:
 | `cluster_version` | No | Kubernetes version |
 | `cluster_oidc_issuer_url` | No | OIDC issuer URL |
 | `cluster_ca` | **Yes** | Base64 cluster CA certificate |
-| `kubectl_config` | No | Map with cluster_name and region for kubeconfig |
+| `kubectl_config` | No | Map of `cluster_name` and `region` for kubeconfig |
 | `node_group_name` | No | Managed node group name |
 | `node_group_status` | No | Node group status |
 | `vpc_id` | No | VPC ID |
@@ -472,14 +562,14 @@ Both modules use four providers:
 ### Prerequisites
 
 ```bash
-# Confirm AWS credentials
+# Confirm AWS credentials and identity
 aws sts get-caller-identity
 
-# Confirm Terraform version (>= 1.11.0 required for use_lockfile)
+# Confirm Terraform version (>= 1.11.0 required)
 terraform version
 
-# Ensure the S3 state bucket exists
-aws s3 ls s3://terraform-s3-state-007
+# Ensure the S3 state bucket exists with versioning enabled
+aws s3api get-bucket-versioning --bucket terraform-s3-state-007
 ```
 
 ### Step 1 — Apply Infra
@@ -492,7 +582,7 @@ terraform plan -out=infra.tfplan
 terraform apply infra.tfplan
 ```
 
-Approximate apply time: 15–20 minutes (EKS cluster creation dominates).
+Approximate apply time: 20–25 minutes. EKS cluster creation (~15 min) dominates; VPC endpoint provisioning adds a few minutes on top.
 
 ### Step 2 — Update kubeconfig
 
@@ -519,18 +609,21 @@ Approximate apply time: 5–8 minutes (Helm releases with `wait = true`).
 ### Step 4 — Verify
 
 ```bash
-# Check ALB controller
+# ALB controller running
 kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
 
-# Check Karpenter
-kubectl get pods -n karpenter
+# Karpenter running and pinned to managed node group
+kubectl get pods -n karpenter -o wide
 
-# Check NodePool and EC2NodeClass
+# NodePool and EC2NodeClass applied
 kubectl get nodepools
 kubectl get ec2nodeclasses
 
-# Verify Karpenter is pinned to the managed node group
-kubectl get pods -n karpenter -o wide
+# Confirm VPC endpoints are active (from AWS side)
+aws ec2 describe-vpc-endpoints \
+  --filters "Name=vpc-id,Values=<your-vpc-id>" \
+  --query 'VpcEndpoints[*].{Service:ServiceName,State:State}' \
+  --output table
 ```
 
 ### Teardown
@@ -544,42 +637,28 @@ cd ../Infra/
 terraform destroy
 ```
 
-> **Note:** Destroy may fail if Karpenter-provisioned nodes or ALB-managed load balancers exist. Scale down workloads and manually delete ALBs/target groups before running `terraform destroy` on Infra if needed.
+> **Note:** Destroy can fail if Karpenter-provisioned nodes or ALB-managed load balancers still exist. Scale down workloads and manually delete ALBs/target groups before running `terraform destroy` on Infra.
 
 ---
 
 ## Design Decisions & Notes
 
-**Two-module split vs. one module:**
-Infra and Bootstrap are deliberately separate because Bootstrap requires a running EKS cluster with a reachable API server. Trying to apply both in a single `terraform apply` causes provider initialization failures since the Kubernetes/Helm providers cannot connect to a cluster that doesn't exist yet.
+**Two-module split:** Infra and Bootstrap are separate because Bootstrap requires a live EKS API server. A single apply fails because the Kubernetes/Helm providers cannot initialise against a cluster that doesn't exist yet.
 
-**API auth mode (no aws-auth ConfigMap):**
-The cluster uses `authentication_mode = API` which is the current AWS recommended approach. Node access is granted via `aws_eks_access_entry` resources (type `EC2_LINUX`), eliminating the fragile aws-auth ConfigMap pattern.
+**Private nodes, public ALB:** Nodes sit in private subnets with no public IPs. The ALB Controller provisions internet-facing ALBs in public subnets using the `kubernetes.io/role/elb: 1` tag. Traffic path: internet → ALB (public subnet) → NodePort on private node. No node is ever directly internet-reachable.
 
-**Karpenter pinned to managed node group:**
-The node affinity in the Karpenter Helm release ensures Karpenter's own pods run on the stable managed node group — not on nodes Karpenter itself manages. This avoids a race condition on startup and on disruption events.
+**`karpenter.sh/discovery` on private subnets only:** By placing this tag exclusively on private subnets, Karpenter's EC2NodeClass automatically discovers only private subnets for node placement — no explicit subnet ID list required, and no risk of a Karpenter node accidentally landing in a public subnet.
 
-**Karpenter CRDs as a separate Helm release:**
-Installing `karpenter-crd` separately from `karpenter` allows upgrading CRDs independently of the controller, avoiding Helm's inability to safely update CRDs in the same release as the controller.
+**Both `endpoint_public_access` and `endpoint_private_access` enabled:** Public access keeps `kubectl` working from developer machines. Private access ensures nodes reach the API server over the VPC's internal network rather than through NAT, reducing both latency and NAT data charges.
 
-**Security group rules as separate resources:**
-Using `aws_security_group_rule` resources (instead of inline `ingress` blocks) with `lifecycle { ignore_changes = [ingress] }` prevents Terraform from fighting EKS's own dynamic security group rule management during node registration.
+**Single NAT Gateway:** One NAT in AZ-a serves all private subnets. With VPC endpoints absorbing ECR, S3, STS, EC2, SQS, SSM, and EKS traffic, the actual data volume hitting NAT is very low — only external destinations like DockerHub, GitHub, and package repos. The cross-AZ data charge for AZ-b nodes routing through AZ-a NAT is negligible at this traffic level.
 
-**Spot interruption handling:**
-The four EventBridge → SQS rules give Karpenter advance notice of node loss events. Karpenter uses this queue to cordon and drain nodes gracefully before AWS terminates them, preventing pod disruption.
+**Gateway endpoints on both route tables:** S3 and DynamoDB gateway endpoints are added to both the private and public route tables. This ensures the free routing applies to all traffic in the VPC regardless of subnet tier, not just private subnet traffic.
 
-**IMDSv2 enforced:**
-The launch template sets `http_tokens = required`, enforcing IMDSv2 on all managed nodes. Karpenter-launched nodes inherit this via the EC2NodeClass.
+**Karpenter CRDs as a separate Helm release:** Installing `karpenter-crd` separately from `karpenter` allows CRDs to be upgraded independently. Helm cannot safely replace CRDs that are part of the same release as the controller — separating them eliminates this lifecycle constraint.
 
-**`expireAfter: 720h` on NodePool:**
-Nodes are voluntarily replaced every 30 days. This ensures OS patches and AMI updates are applied without requiring manual intervention, since the EC2NodeClass uses `al2023@latest`.
+**Karpenter pinned to managed node group:** The node affinity in the Karpenter Helm release ensures Karpenter's own pods run on the stable ON_DEMAND managed node group. This prevents the bootstrap deadlock where Karpenter would need to schedule itself but no Karpenter-managed nodes exist yet.
 
----
+**`expireAfter: 720h` on NodePool:** Nodes are voluntarily replaced every 30 days. Since the EC2NodeClass uses `al2023@latest`, each replacement picks up the latest patched AMI — automated OS patch compliance without any manual intervention.
 
-## Prerequisites
-
-- Terraform >= 1.11.0
-- AWS CLI >= 2.x, authenticated with sufficient IAM permissions
-- S3 bucket `terraform-s3-state-007` pre-created in `ap-south-1` with versioning enabled
-- `kubectl` installed locally
-- `helm` is not required locally (Terraform's Helm provider handles all chart operations)
+**`depends_on = [aws_nat_gateway.nat]` on node group:** Ensures NAT is fully available before the first node attempts to pull a container image. Without this explicit dependency, Terraform may create the node group before NAT is ready, causing image pull failures and node registration failures during the initial apply.
