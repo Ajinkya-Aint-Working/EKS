@@ -1,10 +1,24 @@
 
 # =========================================
 # SECURITY GROUP FOR INTERFACE ENDPOINTS
-# All interface endpoints share one SG.
-# Only needs to accept HTTPS (443) from within the VPC.
+# Shared by all interface endpoints.
+# Created only when at least one interface endpoint is enabled.
 # =========================================
+locals {
+  any_interface_endpoint_enabled = (
+    var.enable_endpoint_ecr_api ||
+    var.enable_endpoint_ecr_dkr ||
+    var.enable_endpoint_ec2     ||
+    var.enable_endpoint_sts     ||
+    var.enable_endpoint_sqs     ||
+    var.enable_endpoint_eks     ||
+    var.enable_endpoint_ssm
+  )
+}
+
 resource "aws_security_group" "vpc_endpoints" {
+  count = local.any_interface_endpoint_enabled ? 1 : 0
+
   name        = "${var.cluster_name}-vpc-endpoints-sg"
   description = "Allow HTTPS from within VPC to interface endpoints"
   vpc_id      = aws_vpc.main.id
@@ -31,8 +45,8 @@ resource "aws_security_group" "vpc_endpoints" {
 }
 
 # =========================================
-# GATEWAY ENDPOINTS — FREE, no hourly cost,
-# no data processing charge, no SG needed.
+# GATEWAY ENDPOINTS — always FREE.
+# No hourly cost, no data charge, no SG needed.
 # Traffic to these services never touches NAT.
 # =========================================
 
@@ -54,8 +68,7 @@ resource "aws_vpc_endpoint" "s3" {
   })
 }
 
-# DynamoDB Gateway Endpoint
-# Free, and some AWS services (e.g. certain SDK internals) use DynamoDB.
+# DynamoDB Gateway Endpoint — free, no reason to toggle.
 resource "aws_vpc_endpoint" "dynamodb" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${var.region}.dynamodb"
@@ -72,19 +85,21 @@ resource "aws_vpc_endpoint" "dynamodb" {
 }
 
 # =========================================
-# INTERFACE ENDPOINTS — ~$7-8/month each
-# but save NAT data charges for high-volume
-# AWS API traffic from nodes and pods.
-# All placed in private subnets, private DNS enabled.
+# INTERFACE ENDPOINTS
+# Each costs ~$7-8/month (2 AZs x $0.01/hr x 720hrs).
+# Toggle each independently via variables in variables.tf.
 # =========================================
 
-# ECR API — authentication and image manifest fetches
+# ECR API — image manifest auth
+# Required if you pull images from ECR.
 resource "aws_vpc_endpoint" "ecr_api" {
+  count = var.enable_endpoint_ecr_api ? 1 : 0
+
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.ecr.api"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
   private_dns_enabled = true
 
   tags = merge(var.tags, {
@@ -92,15 +107,16 @@ resource "aws_vpc_endpoint" "ecr_api" {
   })
 }
 
-# ECR DKR — actual image layer pulls (docker registry protocol)
-# Works together with the S3 endpoint: manifest via ecr.dkr,
-# layers pulled from S3 — both bypass NAT entirely.
+# ECR DKR — actual image layer pulls (docker registry protocol).
+# Works with the S3 endpoint: manifest via ecr.dkr, layers from S3.
 resource "aws_vpc_endpoint" "ecr_dkr" {
+  count = var.enable_endpoint_ecr_dkr ? 1 : 0
+
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.ecr.dkr"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
   private_dns_enabled = true
 
   tags = merge(var.tags, {
@@ -111,11 +127,13 @@ resource "aws_vpc_endpoint" "ecr_dkr" {
 # EC2 — Karpenter makes heavy EC2 API calls:
 # RunInstances, DescribeInstances, CreateFleet, TerminateInstances, etc.
 resource "aws_vpc_endpoint" "ec2" {
+  count = var.enable_endpoint_ec2 ? 1 : 0
+
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.ec2"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
   private_dns_enabled = true
 
   tags = merge(var.tags, {
@@ -127,11 +145,13 @@ resource "aws_vpc_endpoint" "ec2" {
 # Karpenter controller, ALB controller, and EBS CSI driver all call
 # sts:AssumeRoleWithWebIdentity on every pod startup and token refresh.
 resource "aws_vpc_endpoint" "sts" {
+  count = var.enable_endpoint_sts ? 1 : 0
+
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.sts"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
   private_dns_enabled = true
 
   tags = merge(var.tags, {
@@ -140,13 +160,16 @@ resource "aws_vpc_endpoint" "sts" {
 }
 
 # SQS — Karpenter polls the interruption queue continuously.
-# Without this endpoint every poll goes through NAT.
+# Only needed if Karpenter Spot interruption handling is active.
+# If you disable Spot or remove the interruption queue, set to false.
 resource "aws_vpc_endpoint" "sqs" {
+  count = var.enable_endpoint_sqs ? 1 : 0
+
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.sqs"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
   private_dns_enabled = true
 
   tags = merge(var.tags, {
@@ -154,14 +177,17 @@ resource "aws_vpc_endpoint" "sqs" {
   })
 }
 
-# EKS — node bootstrap calls and ongoing API server communication
-# from the kubelet on each node use this endpoint.
+# EKS — node bootstrap and kubelet API server communication.
+# Optional: cluster has public endpoint enabled so kubelet can fall back.
+# Enable to avoid kubelet traffic going through NAT in a fully private setup.
 resource "aws_vpc_endpoint" "eks" {
+  count = var.enable_endpoint_eks ? 1 : 0
+
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.eks"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
   private_dns_enabled = true
 
   tags = merge(var.tags, {
@@ -169,14 +195,21 @@ resource "aws_vpc_endpoint" "eks" {
   })
 }
 
-# SSM — required for SSM Session Manager (node shell access).
-# Three endpoints are needed together: ssm, ssmmessages, ec2messages.
+# =========================================
+# SSM SESSION MANAGER — optional trio
+# All three are controlled by a single variable: enable_endpoint_ssm
+# Use case: shell access to nodes without SSH or a bastion host.
+# NOTE: All three must be on together — enabling only one or two breaks SSM.
+# =========================================
+
 resource "aws_vpc_endpoint" "ssm" {
+  count = var.enable_endpoint_ssm ? 1 : 0
+
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.ssm"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
   private_dns_enabled = true
 
   tags = merge(var.tags, {
@@ -185,11 +218,13 @@ resource "aws_vpc_endpoint" "ssm" {
 }
 
 resource "aws_vpc_endpoint" "ssmmessages" {
+  count = var.enable_endpoint_ssm ? 1 : 0
+
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.ssmmessages"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
   private_dns_enabled = true
 
   tags = merge(var.tags, {
@@ -198,11 +233,13 @@ resource "aws_vpc_endpoint" "ssmmessages" {
 }
 
 resource "aws_vpc_endpoint" "ec2messages" {
+  count = var.enable_endpoint_ssm ? 1 : 0
+
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.ec2messages"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
   private_dns_enabled = true
 
   tags = merge(var.tags, {
