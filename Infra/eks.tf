@@ -4,10 +4,12 @@ resource "aws_eks_cluster" "eks" {
   version  = var.cluster_version
 
   vpc_config {
-    subnet_ids              = aws_subnet.public[*].id
+    # Pass both public and private subnets so the EKS control plane
+    # ENIs are spread across AZs inside the VPC.
+    subnet_ids              = concat(aws_subnet.public[*].id, aws_subnet.private[*].id)
     security_group_ids      = [aws_security_group.eks_cluster.id]
-    endpoint_public_access  = true
-    endpoint_private_access = false
+    endpoint_public_access  = true  # keeps kubectl working from your machine
+    endpoint_private_access = true  # nodes in private subnets reach the API internally
   }
 
   access_config {
@@ -15,7 +17,7 @@ resource "aws_eks_cluster" "eks" {
     bootstrap_cluster_creator_admin_permissions = true
   }
 
-  tags = merge(var.tags, { # ← ADD THIS
+  tags = merge(var.tags, {
     Name = var.cluster_name
   })
 
@@ -92,21 +94,20 @@ resource "aws_launch_template" "node" {
     })
   }
 
-
-  # Tag the launch template resource itself
   tags = merge(var.tags, {
     Name = "${var.cluster_name}-launch-template"
   })
-
 }
 
 # =========================
-# Node Group (ON DEMAND)
+# Node Group (ON DEMAND) — private subnets
+# Nodes launch into private subnets so they have no public IPs.
+# Outbound internet access (ECR pulls, SSM, etc.) goes via the NAT Gateway.
 # =========================
 resource "aws_eks_node_group" "ondemand-node" {
   cluster_name  = aws_eks_cluster.eks.name
   node_role_arn = aws_iam_role.node.arn
-  subnet_ids    = aws_subnet.public[*].id
+  subnet_ids    = aws_subnet.private[*].id  # ← private subnets only
   capacity_type = "ON_DEMAND"
 
   scaling_config {
@@ -129,7 +130,8 @@ resource "aws_eks_node_group" "ondemand-node" {
   })
 
   depends_on = [
-    aws_iam_role_policy_attachment.node_policies
+    aws_iam_role_policy_attachment.node_policies,
+    aws_nat_gateway.nat  # ensure NAT is ready before nodes try to pull images
   ]
 }
 
@@ -142,7 +144,7 @@ resource "aws_eks_addon" "eks-addons" {
   addon_name    = each.value.name
   addon_version = each.value.version
 
-  # 👇 attach role ONLY for EBS CSI
+  # attach role ONLY for EBS CSI
   service_account_role_arn = each.value.name == "aws-ebs-csi-driver" ? aws_iam_role.ebs_csi.arn : null
 
   depends_on = [
@@ -152,7 +154,7 @@ resource "aws_eks_addon" "eks-addons" {
 }
 
 # =========================
-# policy for CSI driver
+# IAM Role for EBS CSI Driver
 # =========================
 
 resource "aws_iam_role" "ebs_csi" {
