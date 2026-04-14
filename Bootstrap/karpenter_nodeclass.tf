@@ -71,39 +71,6 @@ resource "kubectl_manifest" "karpenter_ec2_node_class_default" {
             encrypted: true     # always encrypt at rest
             deleteOnTermination: true
 
-      # -----------------------------------------------
-      # Instance Store — for NVMe-backed instances (c5d,
-      # m5d etc). Leave as false unless you specifically
-      # use instance store for ephemeral data (kafka, etc)
-      # -----------------------------------------------
-      
-      # instanceStorePolicy: RAID0  # comment out if not using NVMe instances
-
-      # -----------------------------------------------
-      # UserData — runs on node boot. Use for:
-      #   - custom kubelet config (image GC, eviction)
-      #   - node-level sysctl tuning
-      #   - pre-pulling images
-      # al2023 uses nodeadm format (not bash script)
-      # -----------------------------------------------
-      userData: |
-        apiVersion: node.eks.aws/v1alpha1
-        kind: NodeConfig
-        spec:
-          kubelet:
-            config:
-              imageGCHighThresholdPercent: 75   # GC images above 75% disk
-              imageGCLowThresholdPercent: 70    # GC down to 70%
-              evictionHard:
-                memory.available: "200Mi"       # evict pods if <200Mi RAM free
-                nodefs.available: "10%"         # evict if <10% disk free
-              maxPods: 110                      # default, adjust per instance size
-              systemReserved:
-                cpu: "100m"
-                memory: "100Mi"
-              kubeReserved:
-                cpu: "100m"
-                memory: "200Mi"
 
       # -----------------------------------------------
       # Tags — applied to the EC2 instance itself.
