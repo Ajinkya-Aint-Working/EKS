@@ -46,14 +46,6 @@ resource "kubectl_manifest" "karpenter_node_pool_spot_arm64" {
             name: default
           expireAfter: 168h             # 7 days — shorter for spot nodes
 
-          # -----------------------------------------------
-          # Startup taints — node is tainted on creation,
-          # removed once node is fully ready. Prevents
-          # pods from landing on a not-yet-ready node.
-          # -----------------------------------------------
-          startupTaints:
-            - key: node.cloudprovider.kubernetes.io/uninitialized
-              effect: NoSchedule
 
       limits:
         cpu: 500
@@ -107,9 +99,7 @@ resource "kubectl_manifest" "karpenter_node_pool_spot_amd64" {
             kind: EC2NodeClass
             name: default
           expireAfter: 168h
-          startupTaints:
-            - key: node.cloudprovider.kubernetes.io/uninitialized
-              effect: NoSchedule
+          
       limits:
         cpu: 500
         memory: 2000Gi
@@ -172,9 +162,7 @@ resource "kubectl_manifest" "karpenter_node_pool_ondemand_arm64" {
             kind: EC2NodeClass
             name: default
           expireAfter: 720h
-          startupTaints:
-            - key: node.cloudprovider.kubernetes.io/uninitialized
-              effect: NoSchedule
+          
       limits:
         cpu: 200
         memory: 800Gi
@@ -227,9 +215,7 @@ resource "kubectl_manifest" "karpenter_node_pool_ondemand_amd64" {
             kind: EC2NodeClass
             name: default
           expireAfter: 720h
-          startupTaints:
-            - key: node.cloudprovider.kubernetes.io/uninitialized
-              effect: NoSchedule
+          
       limits:
         cpu: 200
         memory: 800Gi
